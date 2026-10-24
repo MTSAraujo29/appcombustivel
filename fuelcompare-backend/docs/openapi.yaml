@@ -1,0 +1,583 @@
+openapi: 3.1.0
+info:
+  title: FuelCompare API
+  version: 1.0.0
+  description: |
+    API intermediária do FuelCompare para consulta de postos (OpenStreetMap),
+    preços individuais e médias municipais oficiais da ANP e comparação de preços.
+
+    Os preços não são em tempo real. Preços individuais e médias municipais são
+    categorias distintas e nunca são misturados.
+  contact:
+    name: FuelCompare
+servers:
+  - url: http://localhost:3333/api/v1
+    description: Desenvolvimento local
+tags:
+  - name: Postos
+  - name: Preços
+  - name: Localização
+  - name: Sistema
+paths:
+  /health:
+    get:
+      tags: [Sistema]
+      summary: Estado do serviço
+      description: Retorna 200 quando os dados da ANP estão carregados e 503 quando o serviço está degradado.
+      responses:
+        '200':
+          description: Saudável
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+        '503':
+          description: Degradado (base de preços da ANP indisponível)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Health'
+  /stations/nearby:
+    get:
+      tags: [Postos]
+      summary: Lista postos próximos
+      parameters:
+        - $ref: '#/components/parameters/Latitude'
+        - $ref: '#/components/parameters/Longitude'
+        - name: radiusKm
+          in: query
+          description: Raio de busca em quilômetros.
+          schema: { type: number, minimum: 1, maximum: 10, default: 5 }
+        - name: limit
+          in: query
+          description: Quantidade máxima de postos.
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+        - name: city
+          in: query
+          description: Município para associar as médias municipais da ANP. Quando omitido, é resolvido por geocodificação reversa.
+          schema: { type: string, minLength: 2, maxLength: 100 }
+        - name: state
+          in: query
+          description: UF ou nome do estado.
+          schema: { type: string, minLength: 2, maxLength: 50 }
+      responses:
+        '200':
+          description: Postos encontrados, ordenados por distância
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [stations, regionalPrices, sources]
+                        properties:
+                          stations:
+                            type: array
+                            items: { $ref: '#/components/schemas/Station' }
+                          regionalPrices:
+                            type: array
+                            items: { $ref: '#/components/schemas/RegionalPrice' }
+                          region: { $ref: '#/components/schemas/Region' }
+                          lastUpdated: { type: string, format: date-time }
+                          sources:
+                            type: array
+                            items: { $ref: '#/components/schemas/SourceAttribution' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+        '504':
+          $ref: '#/components/responses/UpstreamTimeout'
+  /stations/{id}:
+    get:
+      tags: [Postos]
+      summary: Detalhes de um posto
+      parameters:
+        - $ref: '#/components/parameters/StationId'
+      responses:
+        '200':
+          description: Detalhes do posto e médias municipais da região
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [station, regionalPrices, sources]
+                        properties:
+                          station: { $ref: '#/components/schemas/Station' }
+                          regionalPrices:
+                            type: array
+                            items: { $ref: '#/components/schemas/RegionalPrice' }
+                          lastUpdated: { type: string, format: date-time }
+                          sources:
+                            type: array
+                            items: { $ref: '#/components/schemas/SourceAttribution' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+  /stations/{id}/prices:
+    get:
+      tags: [Preços]
+      summary: Preços e fontes de um posto
+      parameters:
+        - $ref: '#/components/parameters/StationId'
+      responses:
+        '200':
+          description: Preços individuais do posto e médias municipais da região
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        required: [station, regionalPrices, sources]
+                        properties:
+                          station: { $ref: '#/components/schemas/Station' }
+                          regionalPrices:
+                            type: array
+                            items: { $ref: '#/components/schemas/RegionalPrice' }
+                          lastUpdated: { type: string, format: date-time }
+                          sources:
+                            type: array
+                            items: { $ref: '#/components/schemas/SourceAttribution' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+  /prices/compare:
+    get:
+      tags: [Preços]
+      summary: Compara dois postos
+      description: |
+        Retorna uma linha por combustível presente em pelo menos um dos postos.
+        A diferença é calculada como A − B, somente quando ambos os preços existem.
+        Preços ausentes não são tratados como zero.
+      parameters:
+        - name: stationA
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/StationIdValue' }
+        - name: stationB
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/StationIdValue' }
+      responses:
+        '200':
+          description: Comparação
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/PriceComparison' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /geocode/search:
+    get:
+      tags: [Localização]
+      summary: Busca manual por município, CEP ou endereço
+      parameters:
+        - name: q
+          in: query
+          required: true
+          schema: { type: string, minLength: 2, maxLength: 160 }
+          example: Campinas
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 8, default: 5 }
+      responses:
+        '200':
+          description: Sugestões de localização
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          results:
+                            type: array
+                            items: { $ref: '#/components/schemas/LocationSuggestion' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          $ref: '#/components/responses/UpstreamUnavailable'
+  /geocode/reverse:
+    get:
+      tags: [Localização]
+      summary: Município e UF a partir de coordenadas
+      parameters:
+        - $ref: '#/components/parameters/Latitude'
+        - $ref: '#/components/parameters/Longitude'
+      responses:
+        '200':
+          description: Região resolvida (pode ser nula)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          region:
+                            oneOf:
+                              - $ref: '#/components/schemas/Region'
+                              - type: 'null'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+  /sources:
+    get:
+      tags: [Sistema]
+      summary: Fontes e atribuições dos dados
+      responses:
+        '200':
+          description: Lista de atribuições
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/ApiEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          sources:
+                            type: array
+                            items: { $ref: '#/components/schemas/SourceAttribution' }
+components:
+  parameters:
+    Latitude:
+      name: lat
+      in: query
+      required: true
+      description: Latitude em graus decimais.
+      schema: { type: number, minimum: -90, maximum: 90 }
+      example: -23.5505
+    Longitude:
+      name: lon
+      in: query
+      required: true
+      description: Longitude em graus decimais.
+      schema: { type: number, minimum: -180, maximum: 180 }
+      example: -46.6333
+    StationId:
+      name: id
+      in: path
+      required: true
+      description: Identificador do OpenStreetMap no formato tipo_número.
+      schema:
+        type: string
+        pattern: '^(node|way|relation)_[0-9]{1,20}$'
+        example: way_367319792
+  responses:
+    BadRequest:
+      description: Parâmetros inválidos
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: Recurso não encontrado
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    RateLimited:
+      description: Limite de requisições excedido
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    UpstreamUnavailable:
+      description: Provedor externo indisponível
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    UpstreamTimeout:
+      description: Provedor externo excedeu o tempo limite
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+  schemas:
+    StationIdValue:
+      type: string
+      pattern: '^(node|way|relation)_[0-9]{1,20}$'
+      example: node_123456
+    ApiEnvelope:
+      type: object
+      required: [meta]
+      properties:
+        meta: { $ref: '#/components/schemas/Meta' }
+    Meta:
+      type: object
+      required: [cached, generatedAt, warnings]
+      properties:
+        cached: { type: boolean }
+        generatedAt: { type: string, format: date-time }
+        warnings:
+          type: array
+          items: { type: string }
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code:
+              type: string
+              enum:
+                - INVALID_PARAMETERS
+                - NOT_FOUND
+                - RATE_LIMITED
+                - UPSTREAM_UNAVAILABLE
+                - UPSTREAM_TIMEOUT
+                - INTERNAL_ERROR
+                - HTTPS_REQUIRED
+                - INVALID_JSON
+                - CORS_NOT_ALLOWED
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+            requestId: { type: string }
+    FuelCode:
+      type: string
+      enum: [gasoline, gasoline_additivated, ethanol, diesel_s10, diesel, gnv]
+    PriceUnit:
+      type: string
+      enum: [liter, m3]
+    SourceRef:
+      type: object
+      required: [name, official]
+      properties:
+        name: { type: string }
+        url: { type: string, format: uri }
+        official: { type: boolean }
+    SourceAttribution:
+      type: object
+      required: [id, name, url, description]
+      properties:
+        id:
+          type: string
+          enum: [openstreetmap, anp, nominatim]
+        name: { type: string }
+        url: { type: string, format: uri }
+        description: { type: string }
+    StationAddress:
+      type: object
+      properties:
+        street: { type: string }
+        number: { type: string }
+        neighborhood: { type: string }
+        city: { type: string }
+        state: { type: string }
+        postalCode: { type: string }
+        label: { type: string }
+    StationPrice:
+      type: object
+      required:
+        - fuel
+        - amount
+        - currency
+        - unit
+        - priceType
+        - source
+        - referenceDate
+        - validationStatus
+        - matchMethod
+      properties:
+        fuel: { $ref: '#/components/schemas/FuelCode' }
+        amount:
+          type: number
+          description: Valor em reais por litro ou por metro cúbico (GNV).
+          example: 6.29
+        currency: { type: string, enum: [BRL] }
+        unit: { $ref: '#/components/schemas/PriceUnit' }
+        priceType: { type: string, enum: [individual] }
+        source: { $ref: '#/components/schemas/SourceRef' }
+        referenceDate:
+          type: string
+          format: date
+          description: Data de coleta/divulgação do preço.
+        collectedAt: { type: string, format: date-time }
+        validationStatus: { type: string, enum: [official_survey] }
+        matchMethod:
+          type: string
+          enum: [cnpj, address, name]
+          description: Como o posto do OSM foi associado ao levantamento da ANP.
+    RegionalPrice:
+      type: object
+      required:
+        - fuel
+        - amount
+        - minAmount
+        - maxAmount
+        - currency
+        - unit
+        - priceType
+        - municipality
+        - state
+        - referenceStart
+        - referenceEnd
+        - surveyedStations
+        - source
+      properties:
+        fuel: { $ref: '#/components/schemas/FuelCode' }
+        amount: { type: number }
+        minAmount: { type: number }
+        maxAmount: { type: number }
+        currency: { type: string, enum: [BRL] }
+        unit: { $ref: '#/components/schemas/PriceUnit' }
+        priceType: { type: string, enum: [municipal_average] }
+        municipality: { type: string }
+        state: { type: string, description: UF }
+        referenceStart: { type: string, format: date }
+        referenceEnd: { type: string, format: date }
+        surveyedStations: { type: integer }
+        source: { $ref: '#/components/schemas/SourceRef' }
+    Station:
+      type: object
+      required: [id, name, address, latitude, longitude, prices]
+      properties:
+        id: { type: string, example: way_367319792 }
+        name: { type: string, example: Shell }
+        brand: { type: string }
+        address: { $ref: '#/components/schemas/StationAddress' }
+        latitude: { type: number }
+        longitude: { type: number }
+        distanceKm: { type: number }
+        prices:
+          type: array
+          description: Somente preços individuais associados. Vazio quando não há preço confiável.
+          items: { $ref: '#/components/schemas/StationPrice' }
+        updatedAt: { type: string, format: date-time }
+    Region:
+      type: object
+      required: [municipality, state, latitude, longitude, resolvedFrom]
+      properties:
+        municipality: { type: string }
+        state: { type: string }
+        latitude: { type: number }
+        longitude: { type: number }
+        resolvedFrom: { type: string, enum: [request, geocoder, station] }
+    PriceComparisonSide:
+      type: object
+      required: [stationId, stationName]
+      properties:
+        stationId: { type: string }
+        stationName: { type: string }
+        price: { $ref: '#/components/schemas/StationPrice' }
+    PriceComparisonRow:
+      type: object
+      required: [fuel, comparable, stationA, stationB, note]
+      properties:
+        fuel: { $ref: '#/components/schemas/FuelCode' }
+        comparable: { type: boolean }
+        stationA: { $ref: '#/components/schemas/PriceComparisonSide' }
+        stationB: { $ref: '#/components/schemas/PriceComparisonSide' }
+        difference:
+          type: number
+          description: A − B, somente quando ambos os preços existem.
+        cheaper: { type: string, enum: [A, B, tie] }
+        note:
+          type: string
+          enum: [comparable, tie, only_a, only_b, missing_both]
+    PriceComparison:
+      type: object
+      required: [stationA, stationB, rows]
+      properties:
+        stationA:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+        stationB:
+          type: object
+          properties:
+            id: { type: string }
+            name: { type: string }
+        rows:
+          type: array
+          items: { $ref: '#/components/schemas/PriceComparisonRow' }
+    LocationSuggestion:
+      type: object
+      required: [id, displayName, municipality, state, latitude, longitude]
+      properties:
+        id: { type: string }
+        displayName: { type: string }
+        municipality: { type: string }
+        state: { type: string }
+        latitude: { type: number }
+        longitude: { type: number }
+        postalCode: { type: string }
+    Health:
+      type: object
+      properties:
+        status: { type: string, enum: [ok, degraded] }
+        version: { type: string }
+        timestamp: { type: string, format: date-time }
+        uptimeSeconds: { type: integer }
+        dependencies:
+          type: object
+          properties:
+            openstreetmap:
+              type: object
+              properties:
+                status: { type: string }
+            anp:
+              type: object
+              properties:
+                status: { type: string, enum: [loaded, stale, unavailable] }
+                datasetPeriod:
+                  type: object
+                  properties:
+                    start: { type: string, format: date }
+                    end: { type: string, format: date }
+                loadedAt: { type: string, format: date-time }
+                warnings:
+                  type: array
+                  items: { type: string }
+            nominatim:
+              type: object
+              properties:
+                status: { type: string }
+        cache:
+          type: object
+          additionalProperties: true

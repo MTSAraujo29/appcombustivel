@@ -1,0 +1,45 @@
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+.kotlin/
+.idea/
+*.iml
+captures/
+.cxx/
+.navigation/
+
+# Assinatura e chaves (nunca versionar)
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+keystore.properties
+signing.properties
+
+# Segredos e variáveis de ambiente
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Backend Node.js
+fuelcompare-backend/node_modules/
+fuelcompare-backend/dist/
+fuelcompare-backend/coverage/
+fuelcompare-backend/*.log
+fuelcompare-backend/.tmp/
+fuelcompare-backend/geocode.json
+fuelcompare-backend/nearby.json
+
+# Artefatos de build e entrega (APK/AAB não são versionados)
+/dist/
+*.apk
+*.aab
+
+# Sistema operacional e editores
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
